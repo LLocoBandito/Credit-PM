@@ -1,8 +1,8 @@
 import streamlit as st
 import joblib
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
+from streamlit_echarts import st_echarts
+import numpy as np
 
 # ─────────────────────────────────────────────
 # PREPROCESSING
@@ -230,43 +230,42 @@ def calculate_payment_success_rate(df, loan_grade):
 
 st.set_page_config(
     page_title="Credit Risk Analytics",
-    page_icon="🏦",
+    page_icon="",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 st.markdown("""
 <style>
-/* ── Tombol utama ── */
-div.stButton > button {
-    width: 100%;
-    border-radius: 8px;
-    height: 3.2em;
-    background-color: #0055b3;
-    color: white;
-    font-weight: 600;
-    font-size: 1rem;
-    border: none;
-    transition: background-color 0.2s ease;
-}
-div.stButton > button:hover {
-    background-color: #003d82;
-    color: white;
+
+.main {
+    background-color: #f7f9fc;
 }
 
-/* ── Card metrik ── */
-[data-testid="metric-container"] {
-    background-color: #f0f4fa;
-    border: 1px solid #d0daea;
-    border-radius: 10px;
-    padding: 1rem 1.2rem;
+.block-container{
+    padding-top: 1.5rem;
+    max-width: 1400px;
 }
 
-/* ── Sidebar label ── */
-.css-1d391kg { font-size: 0.9rem; }
+h1,h2,h3{
+    color:#1e293b;
+}
 
-/* ── Tabel lebih rapi ── */
-[data-testid="stDataFrame"] { border-radius: 8px; overflow: hidden; }
+[data-testid="metric-container"]{
+    background:white;
+    border:none;
+    border-radius:16px;
+    padding:20px;
+    box-shadow:0 2px 12px rgba(0,0,0,.06);
+}
+
+div.stButton > button{
+    width:100%;
+    border-radius:12px;
+    height:3.3em;
+    font-weight:600;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -301,7 +300,7 @@ dataset_summary = summarize_dataset_by_status(df_stats)
 # HEADER
 # ─────────────────────────────────────────────
 
-st.title("🏦 Credit Risk Analytics Dashboard")
+st.title("Credit Risk Analytics Dashboard")
 st.markdown(
     "Sistem analisis kelayakan pinjaman berbasis Machine Learning. "
     "Isi profil nasabah di sidebar, lalu klik **Proses Analisis** untuk melihat hasil."
@@ -309,7 +308,7 @@ st.markdown(
 st.divider()
 
 # ── Ringkasan Dataset ──
-st.subheader("📋 Ringkasan Data Historis")
+st.subheader("Ringkasan Data Historis")
 total_nasabah = len(df_stats)
 layak_pct = (df_stats['loan_status'] == 0).mean() * 100
 tidak_layak_pct = 100 - layak_pct
@@ -321,44 +320,85 @@ col3.metric("Nasabah Layak", f"{layak_pct:.1f}%")
 col4.metric("Nasabah Tidak Layak", f"{tidak_layak_pct:.1f}%")
 
 # ── Visualisasi Dataset ──
-with st.expander("📊 Lihat Distribusi Data Historis", expanded=False):
+with st.expander("Lihat Distribusi Data Historis", expanded=False):
     fig_col1, fig_col2 = st.columns(2)
 
-    with fig_col1:
-        fig_hist = px.histogram(
-            df_stats, x="loan_amnt",
-            color="loan_status",
-            color_discrete_map={0: "#2196F3", 1: "#F44336"},
-            labels={"loan_amnt": "Jumlah Pinjaman ($)", "loan_status": "Status"},
-            title="Distribusi Jumlah Pinjaman",
-            nbins=40,
-            barmode="overlay",
-            opacity=0.75,
+    with fig_col1: 
+        layak = df_stats[df_stats["loan_status"] == 0]["loan_amnt"]
+        tidak_layak = df_stats[df_stats["loan_status"] == 1]["loan_amnt"]
+        hist_layak, bins = np.histogram(layak, bins=20)
+        hist_tidak, _ = np.histogram(tidak_layak, bins=bins)
+        
+        option_hist = {
+            "tooltip": {"trigger": "axis"},
+            "legend": {
+                "data": ["Layak", "Tidak Layak"]
+            },
+            "xAxis": {
+                "type": "category",
+                "data": [str(int(x)) for x in bins[:-1]]
+            },
+            "yAxis": {
+                "type": "value"
+            },
+            "series": [
+                {
+                    "name": "Layak",
+                    "type": "bar",
+                    "data": hist_layak.tolist()
+                },
+                {
+                    "name": "Tidak Layak",
+                    "type": "bar",
+                    "data": hist_tidak.tolist()
+                }
+            ]
+        }
+
+        st_echarts(
+            options=option_hist,
+            height="450px"
         )
-        fig_hist.update_layout(
-            legend_title_text="Status",
-            legend=dict(
-                itemsizing='constant',
-                title_text='Status',
-            )
-        )
-        # Ganti label legend angka jadi teks deskriptif
-        fig_hist.for_each_trace(lambda t: t.update(
-            name="Layak" if t.name == "0" else "Tidak Layak"
-        ))
-        st.plotly_chart(fig_hist, use_container_width=True)
 
     with fig_col2:
-        grade_counts = df_stats.groupby(['loan_grade', 'loan_status']).size().reset_index(name='count')
-        grade_counts['Status'] = grade_counts['loan_status'].map({0: 'Layak', 1: 'Tidak Layak'})
-        fig_grade = px.bar(
-            grade_counts, x='loan_grade', y='count', color='Status',
-            color_discrete_map={'Layak': '#2196F3', 'Tidak Layak': '#F44336'},
-            labels={'loan_grade': 'Grade', 'count': 'Jumlah Nasabah'},
-            title="Distribusi Nasabah per Grade",
-            barmode='group',
+        grade_data = (
+            df_stats.groupby(["loan_grade", "loan_status"])
+            .size()
+            .unstack(fill_value=0)
         )
-        st.plotly_chart(fig_grade, use_container_width=True)
+
+        option_grade = {
+            "tooltip": {
+                "trigger": "axis"
+            },
+            "legend": {
+                "data": ["Layak", "Tidak Layak"]
+            },
+            "xAxis": {
+                "type": "category",
+                "data": grade_data.index.tolist()
+            },
+            "yAxis": {
+                "type": "value"
+            },
+            "series": [
+                {
+                    "name": "Layak",
+                    "type": "bar",
+                    "data": grade_data[0].tolist()
+                },
+                {
+                    "name": "Tidak Layak",
+                    "type": "bar",
+                    "data": grade_data[1].tolist()
+                }
+            ]
+        }
+
+        st_echarts(
+            options=option_grade,
+            height="450px"
+        )
 
 st.divider()
 
@@ -367,7 +407,7 @@ st.divider()
 # SIDEBAR INPUT
 # ─────────────────────────────────────────────
 
-st.sidebar.header("👤 Profil Nasabah")
+st.sidebar.header("Profil Nasabah")
 st.sidebar.markdown("Isi seluruh data di bawah ini sebelum memproses analisis.")
 
 with st.sidebar.expander("Data Pribadi", expanded=True):
@@ -393,8 +433,8 @@ st.sidebar.markdown("---")
 # MAIN AREA: INPUT PINJAMAN & KREDIT
 # ─────────────────────────────────────────────
 
-st.subheader("📝 Input Detail Pinjaman & Riwayat Kredit")
-tab1, tab2 = st.tabs(["💳 Detail Pinjaman", "📁 Riwayat Kredit"])
+st.subheader("Input Detail Pinjaman & Riwayat Kredit")
+tab1, tab2 = st.tabs(["Detail Pinjaman", "Riwayat Kredit"])
 
 with tab1:
     c1, c2 = st.columns(2)
@@ -419,7 +459,7 @@ with tab1:
 
     loan_percent_income = loan_amnt / person_income if person_income > 0 else 0.0
     st.info(
-        f"📌 **Rasio Pinjaman / Pendapatan:** `{loan_percent_income:.3f}` "
+        f"**Rasio Pinjaman / Pendapatan:** `{loan_percent_income:.3f}` "
         f"(dihitung otomatis dari jumlah pinjaman ÷ pendapatan tahunan)"
     )
 
@@ -443,7 +483,7 @@ st.divider()
 # TOMBOL ANALISIS
 # ─────────────────────────────────────────────
 
-if st.button("🚀 Proses Analisis Kelayakan"):
+if st.button("Proses Analisis Kelayakan"):
 
     input_data = pd.DataFrame([{
         'person_age': person_age,
@@ -462,23 +502,23 @@ if st.button("🚀 Proses Analisis Kelayakan"):
     # ── Prediksi ──
     prediction = model.predict(input_data)[0]
 
-    st.markdown("## 🔍 Hasil Analisis Kelayakan")
+    st.markdown("## Hasil Analisis Kelayakan")
 
     if prediction == 1:
         st.error(
-            "❌ **STATUS: PINJAMAN DITOLAK**  \n"
+            "❌ **STATUS: PINJAMAN DITOLAK** \n"
             "Profil risiko nasabah tergolong **Tinggi**. "
             "Lihat detail faktor di bawah untuk panduan perbaikan."
         )
     else:
         st.success(
-            "✅ **STATUS: PINJAMAN DITERIMA**  \n"
+            "**STATUS: PINJAMAN DITERIMA** \n"
             "Profil risiko nasabah tergolong **Layak**. "
             "Pinjaman dapat diproses lebih lanjut."
         )
 
     # ── Statistik Grade ──
-    st.markdown("### 📊 Statistik Nasabah dengan Grade yang Sama")
+    st.markdown("### Statistik Nasabah dengan Grade yang Sama")
     success_rate, success_count, total_count = calculate_payment_success_rate(df_stats, loan_grade)
 
     if total_count == 0:
@@ -496,7 +536,7 @@ if st.button("🚀 Proses Analisis Kelayakan"):
     st.divider()
 
     # ── Alasan Keputusan ──
-    st.markdown("### 📋 Faktor Penentu Keputusan")
+    st.markdown("### Faktor Penentu Keputusan")
     applicant_features = {
         'loan_amnt': loan_amnt,
         'person_income': person_income,
@@ -528,7 +568,7 @@ if st.button("🚀 Proses Analisis Kelayakan"):
     st.divider()
 
     # ── Tabel Komparasi ──
-    st.markdown("### 📐 Perbandingan dengan Dataset Historis")
+    st.markdown("### Perbandingan dengan Dataset Historis")
     st.caption(
         "Nilai nasabah dibandingkan dengan **median** kelompok Layak dan Tidak Layak "
         "di dataset historis (`loan_status = 0` → Layak, `loan_status = 1` → Tidak Layak)."
@@ -537,28 +577,35 @@ if st.button("🚀 Proses Analisis Kelayakan"):
     st.dataframe(comparison_df, use_container_width=True, hide_index=True)
 
     # ── Gauge chart skor ──
+    risk_score = 0.0
     if hasattr(model, "predict_proba"):
-        proba = model.predict_proba(input_data)[0][1]  # prob kelas 1 = tidak layak
-        fig_gauge = go.Figure(go.Indicator(
-            mode="gauge+number",
-            value=round(proba * 100, 1),
-            title={'text': "Skor Risiko (%)"},
-            gauge={
-                'axis': {'range': [0, 100]},
-                'bar': {'color': "#F44336" if proba >= 0.5 else "#2196F3"},
-                'steps': [
-                    {'range': [0, 40], 'color': "#e8f5e9"},
-                    {'range': [40, 60], 'color': "#fff8e1"},
-                    {'range': [60, 100], 'color': "#ffebee"},
-                ],
-                'threshold': {
-                    'line': {'color': "black", 'width': 3},
-                    'thickness': 0.8,
-                    'value': 50,
+        proba = model.predict_proba(input_data)[0][1]
+        risk_score = round(proba * 100, 1)
+
+        gauge_option = {
+            "series": [
+                {
+                    "type": "gauge",
+                    "radius": "90%",
+                    "startAngle": 210,
+                    "endAngle": -30,
+                    "progress": {"show": True, "width": 18},
+                    "axisLine": {"lineStyle": {"width": 18}},
+                    "pointer": {"show": True},
+                    "detail": {
+                        "fontSize": 32,
+                        "formatter": "{value}%"
+                    },
+                    "data": [{
+                        "value": risk_score
+                    }]
                 }
-            }
-        ))
-        fig_gauge.update_layout(height=280, margin=dict(t=40, b=10))
-        st.markdown("### 🎯 Skor Risiko Model")
-        st.caption("Skor di atas 50% mengindikasikan risiko tinggi (pinjaman cenderung ditolak).")
-        st.plotly_chart(fig_gauge, use_container_width=True)
+            ]
+        }
+
+        st.markdown("###Skor Risiko Model")
+
+        st_echarts(
+            options=gauge_option,
+            height="400px"
+        )
