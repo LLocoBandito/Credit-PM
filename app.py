@@ -5,68 +5,47 @@ from streamlit_echarts import st_echarts
 import numpy as np
 
 # ─────────────────────────────────────────────
-# PREPROCESSING
+# PREPROCESSING & FEATURE ENGINEERING
 # ─────────────────────────────────────────────
 
 def preprocess_features(df_input):
     df_copy = df_input.copy()
 
-    for col in ['person_emp_length', 'loan_int_rate']:
-        df_copy[col] = df_copy.groupby('loan_grade')[col].transform(
-            lambda grp: grp.fillna(grp.median())
-        )
-        df_copy[col] = df_copy[col].fillna(df_copy[col].median())
+    # 1. Hitung ulang rasio konsisten dengan training pipeline
+    df_copy['loan_percent_income'] = df_copy['loan_amnt'] / df_copy['person_income']
+    df_copy['loan_to_income_ratio'] = df_copy['loan_amnt'] / df_copy['person_income']
 
-    df_copy['loan_percent_income'] = (
-        df_copy['loan_amnt'] / df_copy['person_income'].replace({0: pd.NA})
-    )
-    df_copy['loan_percent_income'] = (
-        df_copy['loan_percent_income']
-        .replace([pd.NA, float('inf'), float('-inf')], pd.NA)
-        .fillna(df_copy['loan_percent_income'].median())
-    )
-
+    # 2. Membuat Bucket / Binning yang sama persis dengan masa training
     df_copy['person_age_bucket'] = pd.cut(
-        df_copy['person_age'],
-        bins=[0, 25, 35, 45, 55, 65, 100],
+        df_copy['person_age'], 
+        bins=[0, 25, 35, 45, 55, 65, 100], 
         labels=['18-25', '26-35', '36-45', '46-55', '56-65', '66+'],
         include_lowest=True
-    ).astype(object).fillna('missing')
+    ).astype(str)
 
     df_copy['emp_length_bucket'] = pd.cut(
-        df_copy['person_emp_length'],
-        bins=[0, 1, 3, 5, 10, 20, 100],
+        df_copy['person_emp_length'], 
+        bins=[0, 1, 3, 5, 10, 20, 100], 
         labels=['<1', '1-3', '4-5', '6-10', '11-20', '20+'],
         include_lowest=True
-    ).astype(object).fillna('missing')
+    ).astype(str)
 
-    df_copy['loan_int_rate_bucket'] = pd.cut(
-        df_copy['loan_int_rate'],
-        bins=[0, 5, 10, 15, 20, 100],
-        labels=['<=5', '5-10', '10-15', '15-20', '>20'],
-        include_lowest=True
-    ).astype(object).fillna('missing')
+    # Catatan: Kolom 'loan_int_rate_bucket' dihapus karena tidak ada di pipeline training
 
-    df_copy['loan_income_ratio'] = (
-        df_copy['loan_amnt'] / df_copy['person_income'].replace({0: pd.NA})
-    )
-    df_copy['loan_income_ratio'] = (
-        df_copy['loan_income_ratio']
-        .replace([pd.NA, float('inf'), float('-inf')], pd.NA)
-        .fillna(df_copy['loan_income_ratio'].median())
-    )
-
+    # Pastikan tipe data numerik konsisten bertipe float
     numeric_cols = [
-        'person_age', 'person_income', 'person_emp_length',
-        'loan_amnt', 'loan_int_rate', 'loan_percent_income',
-        'cb_person_cred_hist_length', 'loan_income_ratio'
+        'person_age', 'person_income', 'person_emp_length', 'loan_amnt', 
+        'loan_int_rate', 'loan_percent_income', 'cb_person_cred_hist_length', 'loan_to_income_ratio'
     ]
-    df_copy[numeric_cols] = df_copy[numeric_cols].astype(float)
+    for col in numeric_cols:
+        if col in df_copy.columns:
+            df_copy[col] = df_copy[col].astype(float)
+            
     return df_copy
 
 
 # ─────────────────────────────────────────────
-# STATISTIK & LOGIKA
+# STATISTIK & LOGIKA UNTUK TAMPILAN UI
 # ─────────────────────────────────────────────
 
 def summarize_dataset_by_status(df):
@@ -87,7 +66,7 @@ def summarize_dataset_by_status(df):
         summary_rows[label] = {
             'loan_amnt': subset['loan_amnt'].median(),
             'person_income': subset['person_income'].median(),
-            'loan_percent_income': subset['loan_percent_income'].median(),
+            'loan_percent_income': (subset['loan_amnt'] / subset['person_income']).median(),
             'cb_person_cred_hist_length': subset['cb_person_cred_hist_length'].median(),
             'loan_int_rate': subset['loan_int_rate'].median(),
             'default_rate': default_rate,
@@ -132,12 +111,12 @@ def build_decision_reasons(applicant, summary):
     rate_threshold = summary.loc['Layak', 'loan_int_rate']
     if applicant['loan_int_rate'] <= rate_threshold:
         good_reasons.append(
-            f"✅ Suku bunga ({applicant['loan_int_rate']}%) "
+            f"✅ Suku bunga ({applicant['loan_int_rate']:.1f}%) "
             f"≤ median nasabah layak ({rate_threshold:.1f}%)."
         )
     else:
         bad_reasons.append(
-            f"⚠️ Suku bunga ({applicant['loan_int_rate']}%) "
+            f"⚠️ Suku bunga ({applicant['loan_int_rate']:.1f}%) "
             f"> median nasabah layak ({rate_threshold:.1f}%)."
         )
 
@@ -211,10 +190,6 @@ def build_comparison_table(applicant, summary):
 
 
 def calculate_payment_success_rate(df, loan_grade):
-    """
-    Hitung tingkat keberhasilan pembayaran nasabah dengan loan_grade yang sama.
-    Mengembalikan (success_rate_pct, success_count, total_count).
-    """
     subset = df[df['loan_grade'] == loan_grade]
     total = len(subset)
     if total == 0:
@@ -225,32 +200,28 @@ def calculate_payment_success_rate(df, loan_grade):
 
 
 # ─────────────────────────────────────────────
-# KONFIGURASI HALAMAN
+# KONFIGURASI HALAMAN STREAMLIT
 # ─────────────────────────────────────────────
 
 st.set_page_config(
     page_title="Credit Risk Analytics",
-    page_icon="",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 st.markdown("""
 <style>
-
 .main {
     background-color: #f7f9fc;
 }
-
 .block-container{
     padding-top: 1.5rem;
     max-width: 1400px;
 }
-
 h1,h2,h3{
     color:#1e293b;
 }
-
 [data-testid="metric-container"]{
     background:white;
     border:none;
@@ -258,20 +229,18 @@ h1,h2,h3{
     padding:20px;
     box-shadow:0 2px 12px rgba(0,0,0,.06);
 }
-
 div.stButton > button{
     width:100%;
     border-radius:12px;
     height:3.3em;
     font-weight:600;
 }
-
 </style>
 """, unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────
-# LOAD MODEL & DATA
+# LOAD MODEL & DATA HISTORIS
 # ─────────────────────────────────────────────
 
 @st.cache_resource
@@ -281,14 +250,6 @@ def load_model():
 @st.cache_data
 def load_data():
     df = pd.read_csv('data/credit_risk_dataset.csv')
-    # Pastikan kolom loan_percent_income tersedia untuk summarize
-    if 'loan_percent_income' not in df.columns:
-        df['loan_percent_income'] = df['loan_amnt'] / df['person_income'].replace({0: pd.NA})
-        df['loan_percent_income'] = (
-            df['loan_percent_income']
-            .replace([float('inf'), float('-inf')], pd.NA)
-            .fillna(df['loan_percent_income'].median())
-        )
     return df
 
 model = load_model()
@@ -297,7 +258,7 @@ dataset_summary = summarize_dataset_by_status(df_stats)
 
 
 # ─────────────────────────────────────────────
-# HEADER
+# HEADER DASHBOARD
 # ─────────────────────────────────────────────
 
 st.title("Credit Risk Analytics Dashboard")
@@ -354,23 +315,13 @@ with st.expander("Lihat Distribusi Data Historis", expanded=False):
                 }
             ]
         }
-
-        st_echarts(
-            options=option_hist,
-            height="450px"
-        )
+        st_echarts(options=option_hist, height="450px")
 
     with fig_col2:
-        grade_data = (
-            df_stats.groupby(["loan_grade", "loan_status"])
-            .size()
-            .unstack(fill_value=0)
-        )
+        grade_data = df_stats.groupby(["loan_grade", "loan_status"]).size().unstack(fill_value=0)
 
         option_grade = {
-            "tooltip": {
-                "trigger": "axis"
-            },
+            "tooltip": {"trigger": "axis"},
             "legend": {
                 "data": ["Layak", "Tidak Layak"]
             },
@@ -394,17 +345,13 @@ with st.expander("Lihat Distribusi Data Historis", expanded=False):
                 }
             ]
         }
-
-        st_echarts(
-            options=option_grade,
-            height="450px"
-        )
+        st_echarts(options=option_grade, height="450px")
 
 st.divider()
 
 
 # ─────────────────────────────────────────────
-# SIDEBAR INPUT
+# SIDEBAR INPUT USER
 # ─────────────────────────────────────────────
 
 st.sidebar.header("Profil Nasabah")
@@ -413,7 +360,7 @@ st.sidebar.markdown("Isi seluruh data di bawah ini sebelum memproses analisis.")
 with st.sidebar.expander("Data Pribadi", expanded=True):
     person_age = st.number_input("Usia", min_value=18, max_value=100, value=30, help="Usia nasabah dalam tahun")
     person_income = st.number_input(
-        "Pendapatan Tahunan ($)", min_value=0, max_value=10_000_000, value=50_000, step=1_000,
+        "Pendapatan Tahunan ($)", min_value=1, max_value=10_000_000, value=50_000, step=1_000,
         help="Total pendapatan tahunan nasabah sebelum pajak"
     )
     person_home_ownership = st.selectbox(
@@ -449,7 +396,7 @@ with tab1:
         help="Grade A = risiko terendah, G = risiko tertinggi"
     )
     loan_amnt = c1.number_input(
-        "Jumlah Pinjaman ($)", min_value=0, max_value=1_000_000, value=10_000, step=500,
+        "Jumlah Pinjaman ($)", min_value=1, max_value=1_000_000, value=10_000, step=500,
         help="Total jumlah pinjaman yang diajukan"
     )
     loan_int_rate = c2.number_input(
@@ -480,12 +427,13 @@ st.divider()
 
 
 # ─────────────────────────────────────────────
-# TOMBOL ANALISIS
+# TOMBOL ANALISIS KELAYAKAN
 # ─────────────────────────────────────────────
 
 if st.button("Proses Analisis Kelayakan"):
 
-    input_data = pd.DataFrame([{
+    # Membuat dataframe awal mentah dari input pengguna
+    raw_input_data = pd.DataFrame([{
         'person_age': person_age,
         'person_income': person_income,
         'person_home_ownership': person_home_ownership,
@@ -494,25 +442,27 @@ if st.button("Proses Analisis Kelayakan"):
         'loan_grade': loan_grade,
         'loan_amnt': loan_amnt,
         'loan_int_rate': loan_int_rate,
-        'loan_percent_income': loan_percent_income,
         'cb_person_default_on_file': cb_person_default_on_file,
         'cb_person_cred_hist_length': cb_person_cred_hist_length,
     }])
 
-    # ── Prediksi ──
+    # !!! PROSES CRUCIAL: Panggil fungsi preprocessing agar kolom sama dengan model training !!!
+    input_data = preprocess_features(raw_input_data)
+
+    # ── Prediksi Berdasarkan Model ──
     prediction = model.predict(input_data)[0]
 
     st.markdown("## Hasil Analisis Kelayakan")
 
     if prediction == 1:
         st.error(
-            "❌ **STATUS: PINJAMAN DITOLAK** \n"
+            "❌ **STATUS: PINJAMAN DITOLAK** \n\n"
             "Profil risiko nasabah tergolong **Tinggi**. "
             "Lihat detail faktor di bawah untuk panduan perbaikan."
         )
     else:
         st.success(
-            "**STATUS: PINJAMAN DITERIMA** \n"
+            "✅ **STATUS: PINJAMAN DITERIMA** \n\n"
             "Profil risiko nasabah tergolong **Layak**. "
             "Pinjaman dapat diproses lebih lanjut."
         )
@@ -576,8 +526,7 @@ if st.button("Proses Analisis Kelayakan"):
     comparison_df = build_comparison_table(applicant_features, dataset_summary)
     st.dataframe(comparison_df, use_container_width=True, hide_index=True)
 
-    # ── Gauge chart skor ──
-    risk_score = 0.0
+    # ── Gauge Chart Skor Risiko ──
     if hasattr(model, "predict_proba"):
         proba = model.predict_proba(input_data)[0][1]
         risk_score = round(proba * 100, 1)
@@ -603,9 +552,5 @@ if st.button("Proses Analisis Kelayakan"):
             ]
         }
 
-        st.markdown("###Skor Risiko Model")
-
-        st_echarts(
-            options=gauge_option,
-            height="400px"
-        )
+        st.markdown("### Skor Risiko Model")
+        st_echarts(options=gauge_option, height="400px")
