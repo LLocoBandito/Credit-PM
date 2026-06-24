@@ -30,8 +30,6 @@ def preprocess_features(df_input):
         include_lowest=True
     ).astype(str)
 
-    # Catatan: Kolom 'loan_int_rate_bucket' dihapus karena tidak ada di pipeline training
-
     # Pastikan tipe data numerik konsisten bertipe float
     numeric_cols = [
         'person_age', 'person_income', 'person_emp_length', 'loan_amnt', 
@@ -427,7 +425,7 @@ st.divider()
 
 
 # ─────────────────────────────────────────────
-# TOMBOL ANALISIS KELAYAKAN
+# TOMBOL ANALISIS KELAYAKAN (MODIFIED LOGIC)
 # ─────────────────────────────────────────────
 
 if st.button("Proses Analisis Kelayakan"):
@@ -446,25 +444,46 @@ if st.button("Proses Analisis Kelayakan"):
         'cb_person_cred_hist_length': cb_person_cred_hist_length,
     }])
 
-    # !!! PROSES CRUCIAL: Panggil fungsi preprocessing agar kolom sama dengan model training !!!
+    # Proses Preprocessing Pipeline
     input_data = preprocess_features(raw_input_data)
 
-    # ── Prediksi Berdasarkan Model ──
+    # Prediksi Klasifikasi Model (0 atau 1)
     prediction = model.predict(input_data)[0]
+
+    # Ambil probabilitas kontinu risiko untuk evaluasi margin
+    risk_score = 0.0
+    if hasattr(model, "predict_proba"):
+        proba = model.predict_proba(input_data)[0][1]
+        risk_score = round(proba * 100, 1)
 
     st.markdown("## Hasil Analisis Kelayakan")
 
+    # KONDISI 1: JIKA MODEL MUTLAK MENOLAK (RISIKO EKSTREM)
     if prediction == 1:
         st.error(
-            "❌ **STATUS: PINJAMAN DITOLAK** \n\n"
+            f"❌ **STATUS: PINJAMAN DITOLAK (Skor Risiko: {risk_score}%)** \n\n"
             "Profil risiko nasabah tergolong **Tinggi**. "
-            "Lihat detail faktor di bawah untuk panduan perbaikan."
+            "Sistem otomatis menolak pengajuan ini karena indikator beban finansial terlalu berbahaya."
         )
+        
+    # KONDISI 2: JIKA MODEL MENERIMA, TAPI MASUK MARGIN RISIKO TINGGI (ZONA WASPADA / WATCHLIST)
+    elif prediction == 0 and risk_score >= 20.0:
+        st.warning(
+            f"⚠️ **STATUS: DISETUJUI BERSYARAT / PERLU PENINJAUAN MANUAL (Skor Risiko: {risk_score}%)** \n\n"
+            "**Catatan Analis:** Meskipun model mengklasifikasikan nasabah ini 'Diterima' karena **tidak memiliki riwayat gagal bayar historis (BI Checking bersih)**, "
+            f"sistem mendeteksi adanya akumulasi margin risiko yang lumayan besar ({risk_score}% dari ambang batas aman <20%).\n\n"
+            "**Faktor Kerawanan Utama:**\n"
+            f"* **Beban Utang Finansial Tinggi:** Rasio pinjaman terhadap pendapatan sebesar `{loan_percent_income:.2f}` telah melewati batas ideal kelompok layak, ditambah suku bunga yang tinggi ({loan_int_rate}%) memperberat cicilan bulanan.\n"
+            "* **Potensi Krisis Baru:** Nasabah tipe ini berisiko menjadi kelompok gagal bayar untuk pertama kalinya (*first-time defaulter*) karena kapasitas likuiditas bulanan yang mepet.\n\n"
+            "👉 *Rekomendasi: Diperlukan peninjauan manual (Manual Underwriting) oleh komite kredit sebelum pencairan dana dilakukan.*"
+        )
+        
+    # KONDISI 3: JIKA MODEL MENERIMA DAN BENAR-BENAR AMAN
     else:
         st.success(
-            "✅ **STATUS: PINJAMAN DITERIMA** \n\n"
-            "Profil risiko nasabah tergolong **Layak**. "
-            "Pinjaman dapat diproses lebih lanjut."
+            f"✅ **STATUS: PINJAMAN DITERIMA MUTLAK (Skor Risiko: {risk_score}%)** \n\n"
+            "Profil risiko nasabah tergolong **Sangat Layak**. "
+            "Seluruh indikator keuangan sehat dan pinjaman dapat langsung diproses tanpa catatan."
         )
 
     # ── Statistik Grade ──
@@ -519,18 +538,11 @@ if st.button("Proses Analisis Kelayakan"):
 
     # ── Tabel Komparasi ──
     st.markdown("### Perbandingan dengan Dataset Historis")
-    st.caption(
-        "Nilai nasabah dibandingkan dengan **median** kelompok Layak dan Tidak Layak "
-        "di dataset historis (`loan_status = 0` → Layak, `loan_status = 1` → Tidak Layak)."
-    )
     comparison_df = build_comparison_table(applicant_features, dataset_summary)
     st.dataframe(comparison_df, use_container_width=True, hide_index=True)
 
     # ── Gauge Chart Skor Risiko ──
     if hasattr(model, "predict_proba"):
-        proba = model.predict_proba(input_data)[0][1]
-        risk_score = round(proba * 100, 1)
-
         gauge_option = {
             "series": [
                 {
